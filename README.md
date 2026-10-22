@@ -29,6 +29,14 @@
 
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
+> **This fork is a course reproducibility study (FTEC5660, Individual Project 2).**
+> It runs the released pipeline on DeepSeek over the paper's own window and
+> tickers, ablates the Bull/Bear research debate, and compares the result with
+> Table 1 of arXiv:2412.20138. Everything added for the study lives in `repro/`
+> and in [REPRODUCIBILITY.md](REPRODUCIBILITY.md); no library code was modified.
+> Not every reported number reproduces — see §7 of that file for what does not,
+> and why.
+
 ## News
 
 <!-- news:start -->
