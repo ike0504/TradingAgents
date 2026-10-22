@@ -37,6 +37,59 @@ def _summary_to_dict(summary) -> dict:
     }
 
 
+def _install_usage_tracker() -> dict:
+    """Count tokens actually billed, by wrapping the LLM wrapper itself.
+
+    Every model call in this repo goes through ``langchain_openai.ChatOpenAI``
+    (``tradingagents.llm_clients.openai_client`` subclasses it), so patching
+    ``_generate`` catches all of them -- including the structured-output retry
+    path -- without touching the repo. Totals are read from the provider's own
+    ``usage`` block rather than estimated from string length.
+    """
+    from langchain_openai import ChatOpenAI
+
+    if getattr(ChatOpenAI, "_repro_tracker", None) is not None:
+        return ChatOpenAI._repro_tracker
+
+    state = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+             "cached_tokens": 0, "reasoning_tokens": 0}
+    original = ChatOpenAI._generate
+
+    def _add(key, value):
+        if isinstance(value, (int, float)):
+            state[key] = state.get(key, 0) + int(value)
+
+    def wrapped(self, messages, stop=None, run_manager=None, **kwargs):
+        out = original(self, messages, stop=stop, run_manager=run_manager, **kwargs)
+        try:
+            state["calls"] += 1
+            llm_output = getattr(out, "llm_output", None) or {}
+            usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
+            if not usage:
+                for gens in getattr(out, "generations", None) or []:
+                    for gen in gens:
+                        meta = getattr(getattr(gen, "message", None),
+                                       "response_metadata", None) or {}
+                        usage = meta.get("usage") or meta.get("token_usage") or {}
+                        if usage:
+                            break
+                    if usage:
+                        break
+            _add("prompt_tokens", usage.get("prompt_tokens"))
+            _add("completion_tokens", usage.get("completion_tokens"))
+            _add("cached_tokens",
+                 (usage.get("prompt_tokens_details") or {}).get("cached_tokens"))
+            _add("reasoning_tokens",
+                 (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
+        except Exception:  # never let accounting break an experiment
+            pass
+        return out
+
+    ChatOpenAI._generate = wrapped
+    ChatOpenAI._repro_tracker = state
+    return state
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=sorted(cfg.ARMS), required=True)
@@ -50,6 +103,10 @@ def main() -> int:
     parser.add_argument("--tag", default=None,
                         help="extra run_id segment, so one ticker can be swept in its "
                              "own process without two processes writing the same log")
+    parser.add_argument("--dates", default=None,
+                        help="explicit comma-separated decision dates, instead of the "
+                             "every-N-days grid. Lets a small budget buy exactly the "
+                             "cells an arm still needs.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -68,10 +125,17 @@ def main() -> int:
         config["data_cache_dir"] = os.path.join(cfg.RESULTS_DIR, "cache", args.tag)
         os.makedirs(config["data_cache_dir"], exist_ok=True)
 
-    dates = iter_grid(args.start, args.end, every_n_days=args.every)
+    dates = ([d.strip() for d in args.dates.split(",") if d.strip()]
+             if args.dates
+             else iter_grid(args.start, args.end, every_n_days=args.every))
     if args.smoke:
         dates = dates[:1]
         args.tickers = args.tickers[:1]
+
+    # Token accounting is off by default because patching the LLM wrapper is
+    # intrusive; set REPRO_TRACK_USAGE=1 to price a cell before committing to a
+    # grid, which is how the grid was sized against the API balance.
+    tracker = _install_usage_tracker() if os.getenv("REPRO_TRACK_USAGE") == "1" else None
 
     run_id = f"{args.arm}_t{args.trial}" + (f"_{args.tag}" if args.tag else "") \
              + ("_smoke" if args.smoke else "")
@@ -114,6 +178,8 @@ def main() -> int:
         "log_path": str(result.log_path),
         "summary": _summary_to_dict(summary),
     }
+    if tracker:
+        payload["token_usage"] = dict(tracker)
 
     out_dir = Path(cfg.RESULTS_DIR) / "sweeps"
     out_dir.mkdir(parents=True, exist_ok=True)
