@@ -137,8 +137,15 @@ def main() -> int:
     # grid, which is how the grid was sized against the API balance.
     tracker = _install_usage_tracker() if os.getenv("REPRO_TRACK_USAGE") == "1" else None
 
+    # A slug keeps one invocation from overwriting another's log: the driver runs
+    # one date at a time, and each of those cells is its own sample. Without it a
+    # second date silently replaced the first.
+    if len(dates) <= 3:
+        date_slug = "_".join(d.replace("-", "") for d in dates)
+    else:
+        date_slug = f"{len(dates)}dates"
     run_id = f"{args.arm}_t{args.trial}" + (f"_{args.tag}" if args.tag else "") \
-             + ("_smoke" if args.smoke else "")
+             + f"_{date_slug}" + ("_smoke" if args.smoke else "")
     print(f"[sweep] arm={args.arm} trial={args.trial} tickers={args.tickers} "
           f"dates={len(dates)} ({dates[0]} .. {dates[-1]}) run_id={run_id}")
 
