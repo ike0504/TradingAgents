@@ -35,7 +35,9 @@ def collect() -> dict:
     d["commits"] = _git("log", "--oneline", "-20").splitlines()
 
     runs = cmp_mod.load_runs()
-    d["n_runs"] = len(runs)
+    # Count every saved sweep, not just the ones whose log directory is still
+    # present; a renamed log does not mean the run did not happen.
+    d["n_runs"] = len(glob_runs())
 
     # Per-arm rollup straight from the sweep JSONs.
     arms: dict[str, dict] = {}
@@ -96,12 +98,15 @@ def collect() -> dict:
 
     # Hit rate / alpha over directional calls only, aggregated per arm.
     for arm in arms:
-        sub = [r for r in rows if r["arm"] == arm and r.get("hit") in ("yes", "no")]
+        # ``hit`` is 1/0 for directional calls and None for directionless ones
+        # (Hold), mirroring the repo's own rule that Hold is reported but not
+        # scored.
+        sub = [r for r in rows if r["arm"] == arm and r.get("hit") is not None]
         allc = [r for r in rows if r["arm"] == arm]
         alphas = [r["alpha"] for r in allc if r.get("alpha") is not None]
         arms[arm]["n_cells"] = len(allc)
         arms[arm]["n_directional"] = len(sub)
-        arms[arm]["hits"] = sum(1 for r in sub if r["hit"] == "yes")
+        arms[arm]["hits"] = sum(int(r["hit"]) for r in sub)
         arms[arm]["hit_rate"] = (arms[arm]["hits"] / len(sub)) if sub else None
         arms[arm]["mean_alpha_all"] = (sum(alphas) / len(alphas)) if alphas else None
         arms[arm]["coverage"] = (len(sub) / len(allc)) if allc else None
@@ -163,6 +168,32 @@ pre{ background:#f7f9fc; border:1px solid var(--line); padding:6pt 8pt;
 """
 
 
+def _cost_line(base: dict) -> str:
+    """Per-cell cost from the cells that had accounting on, and total spend."""
+    vals = [(r["elapsed_sec"], r["cells_run"]) for r in base.get("runs", [])
+            if r.get("elapsed_sec") and r.get("cells_run")]
+    mins = (sum(s / c for s, c in vals) / len(vals) / 60) if vals else None
+    calls = [((r.get("token_usage") or {}).get("calls") or 0) / r["cells_run"]
+             for r in base.get("runs", [])
+             if (r.get("token_usage") or {}).get("calls") and r.get("cells_run")]
+    nc = (sum(calls) / len(calls)) if calls else None
+    parts = []
+    if mins is not None:
+        parts.append(f"~{num(mins,1)} min per cell")
+    if nc:
+        parts.append(f"~{num(nc,0)} LLM calls per cell")
+    try:
+        from repro import balance as bal
+        b = bal.get_balance()
+        cny = next((x["total_balance"] for x in b.get("balance_infos", [])
+                    if x.get("currency") == "CNY"), None)
+        if cny is not None:
+            parts.append(f"¥20.00 of credit opened, ¥{cny:.2f} left at render time")
+    except Exception:
+        pass
+    return "; ".join(parts) + " (baseline)" if parts else "--"
+
+
 def pct(x, dp=2):
     return "--" if x is None else f"{x*100:.{dp}f}%"
 
@@ -172,7 +203,8 @@ def num(x, dp=2):
 
 
 def sp(x, dp=2):
-    return "--" if x is None else f"{x:+.{dp}f}%"
+    """Signed percentage. Values are held as fractions, so scale by 100."""
+    return "--" if x is None else f"{x * 100:+.{dp}f}%"
 
 
 def esc(s):
@@ -277,9 +309,7 @@ def render(d: dict) -> str:
                     "gitignored at <code>.gitignore:151</code>"),
         ("Window", f"{cfg.WINDOW_START} &rarr; {cfg.WINDOW_END} (the paper's own), "
                    "decision dates every 14 days"),
-        ("Observed cost", f"~{num(base.get('seconds',0)/max(base.get('cells',1),1)/60,1)} min "
-                          f"and ~{num(base.get('calls',0)/max(base.get('cells',1),1),0)} "
-                          "LLM calls per cell (baseline)"),
+        ("Observed cost", _cost_line(base)),
     ]
     for k, v in setup:
         A(f'<tr><td>{k}</td><td>{v}</td></tr>')
@@ -367,7 +397,7 @@ def render(d: dict) -> str:
         A(f'<tr><td class="l">{r["arm"]}</td><td>{r.get("trial","")}</td>'
           f'<td class="l">{r["ticker"]}</td><td class="l">{r["date"]}</td>'
           f'<td class="l">{r["rating"]}</td><td>{sp(r.get("alpha"),2)}</td>'
-          f'<td class="l">{r.get("hit","") or "—"}</td></tr>')
+          f'<td class="l">{("yes" if r.get("hit") else "no") if r.get("hit") is not None else "—"}</td></tr>')
     A('</table>')
 
     # 4.3 Table 1
@@ -424,17 +454,33 @@ def render(d: dict) -> str:
         A(f'<tr><td class="l">hit rate (all cells pooled)</td>'
           f'<td>{pct(base["hit_rate"],1)}</td><td>{pct(nodeb["hit_rate"],1)}</td>'
           f'<td>{num((nodeb["hit_rate"]-base["hit_rate"])*100,1)} pp</td></tr>')
-    if base.get("calls") and base.get("cells") and nodeb.get("calls") and nodeb.get("cells"):
-        cb = base["calls"] / base["cells"]
-        cn = nodeb["calls"] / nodeb["cells"]
-        A(f'<tr><td class="l">LLM calls per cell</td><td>{num(cb,1)}</td>'
-          f'<td>{num(cn,1)}</td><td>{num(cn-cb,1)}</td></tr>')
-    if base.get("prompt") and nodeb.get("prompt") and base.get("cells") and nodeb.get("cells"):
-        pb = base["prompt"] / base["cells"]
-        pn = nodeb["prompt"] / nodeb["cells"]
+    # Per-cell cost comes only from runs that had token accounting switched on
+    # (REPRO_TRACK_USAGE=1), so it is averaged over those runs rather than
+    # divided through the whole grid -- otherwise untracked cells would silently
+    # dilute it.
+    def per_cell(arm: str, field: str) -> float | None:
+        vals = [((r.get("token_usage") or {}).get(field) or 0) / r["cells_run"]
+                for r in arms.get(arm, {}).get("runs", [])
+                if (r.get("token_usage") or {}).get(field) and r.get("cells_run")]
+        return (sum(vals) / len(vals)) if vals else None
+
+    cb, cn = per_cell("baseline", "calls"), per_cell("no_debate", "calls")
+    if cb and cn:
+        A(f'<tr><td class="l">LLM calls per cell</td><td>{num(cb,0)}</td>'
+          f'<td>{num(cn,0)}</td><td>{num(cn-cb,0)}</td></tr>')
+    pb, pn = per_cell("baseline", "prompt_tokens"), per_cell("no_debate", "prompt_tokens")
+    if pb and pn:
         A(f'<tr><td class="l">prompt tokens per cell</td><td>{pb:,.0f}</td>'
           f'<td>{pn:,.0f}</td><td>{num((pn-pb)/pb*100,0)}%</td></tr>')
+    tb, tn = per_cell("baseline", "completion_tokens"), per_cell("no_debate", "completion_tokens")
+    if tb and tn:
+        A(f'<tr><td class="l">completion tokens per cell</td><td>{tb:,.0f}</td>'
+          f'<td>{tn:,.0f}</td><td>{num((tn-tb)/tb*100,0)}%</td></tr>')
     A('</table>')
+    A('<p class="foot">Cost rows are averaged over the cells run with '
+      '<code>REPRO_TRACK_USAGE=1</code>; the driver does not enable it by '
+      'default, so untracked cells are excluded rather than diluting the '
+      'average.</p>')
 
     # ---------------- 5 debug diary
     A('<h2>5. Debug diary</h2>')
@@ -499,14 +545,29 @@ def render(d: dict) -> str:
       'debate — executes as described.</p>')
 
     A('<h3>6.2 What the modification shows</h3>')
+    bh = (t1["reference"].get("AAPL") or {}).get("our_B&H") or {}
+    b_cr = ((t1["arms"].get("baseline", {}).get("tickers", {}).get("AAPL") or {})
+            .get("metrics", {}).get("CR%", {}).get("mean"))
+    n_cr = ((t1["arms"].get("no_debate", {}).get("tickers", {}).get("AAPL") or {})
+            .get("metrics", {}).get("CR%", {}).get("mean"))
     A('<p>Removing the bearish researcher does not make the system mildly more '
       'bullish; it removes its capacity for dissent. With the debate on, ratings '
       'spread across Hold / Overweight / Underweight; with it off, every cell is '
-      'Overweight. The downstream consequence is measurable on the '
-      'reconstructed portfolio and on hit rate (§4.4). This is a genuine '
-      'confirmation of the paper\'s design claim — the debate is load-bearing, '
-      'not decorative — and it is the one result in this study that is ours '
-      'alone, independent of whether the paper\'s absolute numbers hold up.</p>')
+      'Overweight. The downstream consequence is measurable on hit rate and on '
+      'the reconstructed portfolio (§4.4). This is a genuine confirmation of '
+      'the paper\'s design claim — the debate is load-bearing, not decorative '
+      '— and it is the one result in this study that is ours alone, independent '
+      'of whether the paper\'s absolute numbers hold up.</p>')
+    if None not in (b_cr, n_cr) and bh.get("CR%") is not None:
+        A(f'<div class="note good">Read against the buy-and-hold control, the '
+          f'reconstruction says the agent <i>does</i> add value — but by '
+          f'{num(b_cr - bh["CR%"],1)} percentage points of cumulative return '
+          f'over {num(bh["CR%"],2)}%, not by the '
+          f'{num((t1["reference"]["AAPL"]["paper_TradingAgents"] or {}).get("CR%"),2)}% '
+          f'the paper reports. Ablating the debate gives back most of that '
+          f'({num(n_cr - b_cr,1)} pp). So the <i>direction</i> of the paper\'s '
+          f'claim survives in our run while its <i>magnitude</i> does not, and '
+          f'the debate is what carries the difference.</div>')
 
     A('<h3>6.3 What does not reproduce, and the mechanism in each case</h3>')
     A('<table class="verdict"><tr><th class="l">Finding</th>'

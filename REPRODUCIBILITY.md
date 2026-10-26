@@ -107,36 +107,155 @@ analysts, risk-discussion rounds, tool rounds — is identical.
 
 ## 4. Results
 
-*Filled in once the sweeps finish. See §7 for the findings that are already
-established and do not depend on them.*
+AAPL, the paper's own window, decision dates every 14 days, 2 trials per arm.
+The full rendered report — including every individual cell — is produced by
+`python -m repro.report` and is not retyped here, so it cannot drift from the run.
 
 ### 4.1 Primary: the repo's own metric (hit rate / mean alpha)
 
-| arm | hit rate | mean alpha |
-|---|---|---|
-| baseline (Bull + Bear) | | |
-| no_debate (Bull only) | | |
+Hit rate = share of *directional* calls whose realised alpha had the sign the
+rating implied. Hold carries no direction and is reported but not scored; that
+is the repo's own rule in `backtest.summarize`.
 
-### 4.2 Secondary: our run vs Table 1
+| arm | trials | cells | directional calls | hit rate | coverage | mean alpha (all cells) |
+|---|---|---|---|---|---|---|
+| baseline (Bull + Bear) | 2 | 10 | 8 | **62.5%** | 80% | −1.22% |
+| no_debate (Bull only) | 2 | 9 | 9 | **22.2%** | 100% | −1.33% |
 
-| | CR% | ARR% | SR | MDD% |
+Per trial: baseline 66.7% / 60.0%; no_debate 20.0% / 25.0%.
+
+**A methodological trap worth stating.** Alpha is a market fact: for the same
+(ticker, date) it is *identical* in both arms, because it is measured from
+prices, not from the decision. The modification therefore cannot move alpha.
+What it moves is whether the rating *called* the direction. Hit rate and the
+rating distribution are the correct dependent variables; "ablating the debate
+changed mean alpha from X to Y" would be a misreading, because the two arms are
+scoring different subsets of cells.
+
+### 4.2 What the modification did: the rating distribution collapsed
+
+| arm | Buy | Overweight | Hold | Underweight | Sell | cells |
+|---|---|---|---|---|---|---|
+| baseline | 0 | 3 | 2 | 5 | 0 | 10 |
+| no_debate | 0 | **9** | 0 | 0 | 0 | 9 |
+
+**Every no_debate cell came back Overweight.** Without a Bear Researcher the
+system does not become more bullish on average — it becomes structurally unable
+to produce a negative view. That is the mechanism behind both 4.1 and 4.3.
+
+### 4.3 Secondary: our run vs Table 1
+
+Reconstructed from the rating stream (rating → exposure Buy ±1 / Over-Under
+±0.5 / Hold 0; each decision held from the next close until the following one;
+no transaction costs). ARR% is omitted: see §7.4.
+
+| ticker | row | CR% | SR | MDD% |
 |---|---|---|---|---|
-| paper, TradingAgents (AAPL) | 26.62 | 30.5 | 8.21 | 0.91 |
-| ours (AAPL) | | | | |
-| paper, B&H (AAPL) | -5.23 | -5.09 | -1.29 | 11.90 |
-| recomputed B&H (AAPL) | **-7.63** | -28.34 | -1.57 | 13.41 |
+| AAPL | paper — TradingAgents | 26.62 | 8.21 | 0.91 |
+| AAPL | paper — Buy & Hold | −5.23 | −1.29 | 11.90 |
+| AAPL | **ours — Buy & Hold, same prices** | **−7.63** | −1.57 | 13.41 |
+| AAPL | ours — baseline | **+0.12** | −0.11 | 2.09 |
+| AAPL | ours — no_debate | **−2.39** | −1.17 | 3.88 |
+
+Read against the control: our reconstruction has the agent *beating*
+buy-and-hold by about 7.8 points of cumulative return, in a quarter when
+buy-and-hold lost 7.63% — but the paper reports +26.62%. **The direction of the
+claim survives; the magnitude does not.**
+
+### 4.4 The modification, quantified
+
+| effect of removing the Bull/Bear debate | baseline | no_debate | Δ |
+|---|---|---|---|
+| AAPL CR% | +0.12 | −2.39 | −2.51 |
+| AAPL SR | −0.11 | −1.17 | −1.06 |
+| AAPL MDD% | 2.09 | 3.88 | +1.79 |
+| hit rate (pooled) | 62.5% | 22.2% | −40.3 pp |
+| LLM calls per cell | 23 | 19 | −4 |
+| prompt tokens per cell | 217,126 | 155,274 | −28% |
+| completion tokens per cell | 69,190 | 51,606 | −25% |
 
 ---
 
 ## 5. Debug diary
 
-*Completed as the run progresses.*
+1. **Table 1 does not exist in the code.** Expected a portfolio simulator;
+   found `backtest.py` scoring independent cells and stating it must not grow
+   one. Fix: `repro/portfolio_sim.py` reconstructs an equity curve from the
+   rating stream, with every mapping assumption written into the module
+   docstring so it can be audited or changed.
+
+2. **News returns nothing for any historical date.** `get_news_yfinance`
+   gives the "unavailable" fallback for 2024-01 and for dates three months ago
+   alike; `yf.Ticker().get_news()` and `.news` are both empty. Only
+   `yf.Search()` returns articles, and only current ones, which the date filter
+   then discards. Not fixable — recorded as a finding (§7.2).
+
+3. **Macro and social are dead too.** `Vendor 'fred' not configured ...
+   FRED_API_KEY is not set`; StockTwits/Reddit rate-limit.
+
+4. **Three parallel processes burned the entire API balance.** Ran three
+   tickers concurrently straight through DeepSeek's peak window (09:00–12:00
+   and 14:00–18:00 Beijing, double price) with no balance check; from 11:04
+   every cell returned `402 Insufficient Balance` and the **entire no_debate
+   arm scored zero cells** — the modification experiment, a required
+   deliverable, was empty. Fix: `repro/balance.py` and `repro/run_budget.py`.
+   The driver now reads the balance before each cell, refuses to run in a peak
+   window, and skips cells that already have a score, so an interrupted run
+   resumes without re-buying. That is also why this run survived three days of
+   the laptop being off.
+
+5. **Structured output silently degrades on DeepSeek.** `Research Manager:
+   structured-output invocation failed ... retrying once as free text`, and the
+   same for the Trader. Left as-is and disclosed rather than patched, because
+   patching it would change the system under test.
+
+6. **Thinking tokens are billed and there is no switch.** Searched the repo for
+   a thinking-mode toggle; there is none, so the only lever is scheduling.
+   About 37k of 69k completion tokens in a calibration cell were reasoning
+   tokens.
+
+7. **The paper's Buy & Hold row did not reproduce, on a quantity that needs no
+   model.** Grid-searched (start, end) windows for a joint fit across all three
+   tickers; none exists. Diagnosed as data provenance, not a bug in my metrics
+   (§7.3).
+
+8. **Two reporting bugs of my own, caught by re-rendering.** A percentage
+   formatter dropped the ×100, so every alpha read as −0.01%; and per-cell
+   token cost was divided through the whole grid rather than through the cells
+   that actually had accounting enabled, diluting 23 calls/cell to 2.3. Both
+   are why `repro/report.py` renders from the result files instead of prose —
+   a wrong number in prose survives forever.
 
 ---
 
 ## 6. Conclusions
 
-*To be written with the numbers.*
+**What reproduces.** The engineering claim holds. The pipeline runs end-to-end
+on a laptop with nothing but an API key, emits a five-tier rating per cell, and
+settles each to a measurable alpha against a regional benchmark. DeepSwap drops
+in through the repo's own provider with no code change. The multi-agent graph
+executes as described.
+
+**What the modification shows.** The debate is load-bearing, not decorative.
+Removing the bearish researcher removes the system's capacity for dissent
+entirely, and that is measurable on hit rate and on the reconstructed
+portfolio. This is the one result here that is independent of whether the
+paper's absolute numbers hold up.
+
+**What does not reproduce, and why.** Three mechanisms, in order of how much
+they cost: Table 1 is not implemented in the released code at all; two of the
+paper's four data channels return nothing for historical dates, so the system
+we ran is not the system the paper evaluated; and — the binding one — the
+paper's own Buy & Hold row fails to reproduce on a quantity requiring no model,
+which puts a floor under every other discrepancy and proves the gap cannot be
+blamed on the LLM swap alone.
+
+**What the DeepSeek substitution can and cannot explain.** It can explain
+throughput (~23 calls and ~5 min per cell against the paper's "11 LLM calls")
+and the structured-output fallback — both real differences in the decision
+path. It cannot explain the Buy & Hold gap (no model involved), the missing
+data channels (vendor-side), or the ARR% inconsistency (arithmetic). Our
+numbers are reported as ours and are not claimed to be comparable to Table 1.
 
 ---
 
@@ -235,6 +354,9 @@ through which channel.
 | DeepSeek drops in as a backbone via the built-in provider | ✅ reproduced |
 | Decisions are emitted as a five-tier rating and settle to an alpha | ✅ reproduced |
 | The Bull/Bear debate can be ablated cleanly | ✅ reproduced (isolated, one config key) |
+| The debate matters: ablating it collapses the rating distribution | ✅ reproduced — 9/9 cells Overweight; hit rate 62.5% → 22.2% |
+| Directional calls beat the benchmark | ⚠️ partial — 62.5% hit rate on 8 scored calls; reconstruction beats B&H by ~7.8pp, not the paper's +26.62% |
 | Table 1 CR% / ARR% / SR / MDD% | ❌ not reproducible — not implemented in the released code |
-| The paper's Buy & Hold row | ❌ not reproducible — systematic ~16% attenuation, no window fits |
+| The paper's Buy & Hold row | ❌ not reproducible — systematic attenuation (ratio 0.842 on GOOGL/AMZN), no window fits |
+| The paper's ARR% column | ❌ not reproducible — internally inconsistent with its own CR% |
 | The paper's news / macro / social inputs | ❌ not reproducible — vendors return nothing for historical dates |
