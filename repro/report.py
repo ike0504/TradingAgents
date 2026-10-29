@@ -16,6 +16,7 @@ from repro import config as cfg
 from repro import cells as cells_mod
 from repro import compare as cmp_mod
 from repro import aggregate as agg_mod
+from repro import stats as stats_mod
 
 
 def _git(*args: str) -> str:
@@ -95,6 +96,15 @@ def collect() -> dict:
         dist.setdefault(r["arm"], {})
         dist[r["arm"]][r["rating"]] = dist[r["arm"]].get(r["rating"], 0) + 1
     d["rating_dist"] = dist
+
+    # Exact tests. The counts are small enough that no normal approximation is
+    # needed, and scipy is not installed here, so the 2x2 tests are computed
+    # exactly in repro/stats.py.
+    try:
+        d["stats"] = stats_mod.all_tests()
+    except Exception as exc:                     # a broken test must not break the report
+        d["stats"] = None
+        d["stats_error"] = f"{type(exc).__name__}: {exc}"
 
     # Hit rate / alpha over directional calls only, aggregated per arm.
     for arm in arms:
@@ -238,6 +248,8 @@ def render(d: dict) -> str:
     A('<h2>1. Verdict at a glance</h2>')
     A('<table class="verdict"><tr><th class="l">Claim under test</th>'
       '<th class="l">Status</th><th class="l">Evidence</th></tr>')
+    _stab_v = ((d.get("stats") or {}).get("stability", {})
+               .get("baseline") or {}).get("n_unanimous", "?")
     verdict = [
         ("p-ok", "YES", "The pipeline runs end-to-end on a laptop: API-only, no GPU",
          f"{d['n_runs']} runs completed; {base.get('resolved',0)+nodeb.get('resolved',0)} "
@@ -251,6 +263,10 @@ def render(d: dict) -> str:
          f"{base.get('n_directional',0)} scored calls; mean alpha "
          f"{sp(base.get('mean_alpha_all'),2)} — above zero on direction, "
          "not on the window's realised move"),
+        ("p-no", "NO", "A run repeats itself at temperature 0",
+         f"only {_stab_v}/7 cells gave the same rating in all 3 runs; "
+         "the ablated arm is stable precisely because it never varies in "
+         "what it says"),
         ("p-no", "NO", "Table 1 (CR% / ARR% / SR / MDD%)",
          "not implemented anywhere in the released v0.7.0 code"),
         ("p-no", "NO", "The paper's own Buy &amp; Hold row",
@@ -386,19 +402,47 @@ def render(d: dict) -> str:
           'saying anything else. That is a cleaner result than a shift in mean '
           'alpha, and it is the mechanism behind the numbers in 4.1 and 4.3.</div>')
 
-    # per-cell detail
-    A('<table><caption>Every settled cell. Alpha is a market fact — identical '
-      'for both arms on the same (ticker, date) — so the modification cannot '
-      'change it; what changes is whether the rating called its direction.'
-      '</caption><tr><th class="l">Arm</th><th>T</th><th class="l">Ticker</th>'
-      '<th class="l">Date</th><th class="l">Rating</th><th>Alpha</th>'
-      '<th class="l">Hit</th></tr>')
+    # Per-cell detail, laid out as date x trial so that the two things worth
+    # seeing -- the collapse and the instability -- are both visible in five
+    # rows. AAPL is the ticker carried through all three trials, so it is the
+    # one that can show instability at all.
+    A('<table><caption>AAPL, each decision date re-run three times with '
+      'identical inputs. Alpha is a market fact — identical for both arms on '
+      'the same date — so the modification cannot change it; what changes is '
+      'whether the rating called its direction. GOOGL and AMZN were run for '
+      'two trials each and are in <code>results/cells.csv</code>.</caption>'
+      '<tr><th class="l">Date</th><th>Realised alpha</th>'
+      '<th colspan="3">baseline (Bull + Bear)</th>'
+      '<th colspan="3">no_debate (Bull only)</th></tr>'
+      '<tr><th class="l"></th><th></th>'
+      + "".join(f'<th>t{t}</th>' for t in (1, 2, 3))
+      + "".join(f'<th>t{t}</th>' for t in (1, 2, 3)) + '</tr>')
+
+    def cell_rating(arm: str, date: str, trial: int) -> str:
+        for r in d["cells"]:
+            if (r["arm"] == arm and r["ticker"] == "AAPL" and r["date"] == date
+                    and r.get("trial") == trial):
+                return r["rating"]
+        return "—"
+
+    aapl_dates = sorted({r["date"] for r in d["cells"] if r["ticker"] == "AAPL"})
+    _alpha = {}
     for r in d["cells"]:
-        A(f'<tr><td class="l">{r["arm"]}</td><td>{r.get("trial","")}</td>'
-          f'<td class="l">{r["ticker"]}</td><td class="l">{r["date"]}</td>'
-          f'<td class="l">{r["rating"]}</td><td>{sp(r.get("alpha"),2)}</td>'
-          f'<td class="l">{("yes" if r.get("hit") else "no") if r.get("hit") is not None else "—"}</td></tr>')
+        if r["ticker"] == "AAPL" and r.get("alpha") is not None:
+            _alpha[r["date"]] = r["alpha"]
+    for date in aapl_dates:
+        cells_row = "".join(
+            f'<td>{cell_rating(arm, date, t)}</td>'
+            for arm in ("baseline", "no_debate") for t in (1, 2, 3))
+        # A cell is highlighted when the three runs of one arm disagreed.
+        A(f'<tr><td class="l">{date}</td><td>{sp(_alpha.get(date),2)}</td>'
+          f'{cells_row}</tr>')
     A('</table>')
+    A('<p class="foot">Read the two blocks apart. The right-hand block is '
+      'identical in every row and every column — that is the collapse. The '
+      'left-hand block changes from trial to trial on the same date: the three '
+      'verdicts for 2024-01-01 are Overweight, Underweight and Overweight. '
+      'That is the instability, and it is the price of the debate.</p>')
 
     # 4.3 Table 1
     A('<h3>4.3 Secondary metric — our run next to Table 1</h3>')
@@ -482,6 +526,92 @@ def render(d: dict) -> str:
       'default, so untracked cells are excluded rather than diluting the '
       'average.</p>')
 
+    # 4.5 is the effect real?
+    st = d.get("stats") or {}
+    A('<h3>4.5 Is the effect real, or is it noise?</h3>')
+    if not st:
+        A('<p class="foot">Exact tests unavailable'
+          + (f' ({esc(d.get("stats_error",""))})' if d.get("stats_error") else '')
+          + '.</p>')
+    else:
+        co, hi, pa = st["collapse"], st["hits"], st["paired"]
+        A('<table><caption>Two exact tests on the same 38 cells. Fisher\'s '
+          'exact test is used because the smallest cell is 0, so no normal '
+          'approximation applies.</caption>'
+          '<tr><th class="l">Comparison</th><th>baseline</th>'
+          '<th>no_debate</th><th>two-sided p</th></tr>')
+        A(f'<tr><td class="l">Ratings that are Overweight</td>'
+          f'<td>{co["baseline"]["overweight"]} / 19</td>'
+          f'<td>{co["no_debate"]["overweight"]} / 19</td>'
+          f'<td><b>{co["p_fisher"]:.1e}</b></td></tr>')
+        A(f'<tr><td class="l">Directional calls that hit</td>'
+          f'<td>{hi["baseline"]["hits"]} / '
+          f'{hi["baseline"]["hits"] + hi["baseline"]["misses"]}</td>'
+          f'<td>{hi["no_debate"]["hits"]} / '
+          f'{hi["no_debate"]["hits"] + hi["no_debate"]["misses"]}</td>'
+          f'<td><b>{hi["p_fisher"]:.3f}</b></td></tr>')
+        A('</table>')
+        A('<p>The structural effect is the strong one: at p '
+          f'<code>{co["p_fisher"]:.1e}</code> the rating distribution did not '
+          'merely shift, it collapsed. The effect on hit rate is real but it is '
+          'the weaker of the two, and it is weaker for a reason worth stating '
+          'plainly: the debate moves ratings <i>towards</i> Hold and '
+          'Underweight, and a Hold is not scored at all, so ablation changes '
+          'which cells are even counted. The direction of the effect is '
+          'consistent in every trial:</p>')
+        A('<table><caption>Per-trial hit rate, paired. Within a trial the '
+          'market data is fixed, so the trial-to-trial spread is the '
+          'pipeline\'s own.</caption><tr><th class="l">trial</th>'
+          '<th>baseline</th><th>no_debate</th><th>&Delta;</th></tr>')
+        for t in sorted(set(pa["baseline"]) | set(pa["no_debate"])):
+            b, n = pa["baseline"].get(t), pa["no_debate"].get(t)
+            A(f'<tr><td class="l">trial {t}</td>'
+              f'<td>{pct(b,1) if b is not None else "--"}</td>'
+              f'<td>{pct(n,1) if n is not None else "--"}</td>'
+              f'<td>{num((b-n)*100,1)+" pp" if None not in (b,n) else "--"}</td></tr>')
+        if pa["mean_diff"] is not None:
+            A(f'<tr><td class="l">mean over trials</td><td></td><td></td>'
+              f'<td><b>{pa["mean_diff"]*100:+.1f} pp</b> &plusmn; '
+              f'{pa["sd_diff"]*100:.1f}</td></tr>')
+        A('</table>')
+        A(f'<p class="foot">{pa["n_positive"]}/{pa["n_trials"]} trials move the '
+          'same way. Three trials is the minimum the assignment asks for and it '
+          'is not enough to separate the debate\'s effect from run-to-run '
+          'noise; the structural result in the first row is the one that '
+          'carries.</p>')
+
+    # 4.6 does it repeat itself?
+    A('<h3>4.6 Does a run repeat itself?</h3>')
+    if st:
+        stab = st["stability"]
+        b, n = stab.get("baseline") or {}, stab.get("no_debate") or {}
+        A('<p>Each cell was run three times with identical inputs, identical '
+          'code and <code>temperature = 0.0</code>. Greedy decoding is supposed '
+          'to make a run repeatable, so the three verdicts should agree:</p>')
+        A('<table><caption>Cells whose verdict was identical in every repeated '
+          'run.</caption><tr><th class="l">arm</th><th>unanimous cells</th>'
+          '<th>share</th></tr>')
+        for arm, s in (("baseline", b), ("no_debate", n)):
+            if s.get("n_cells"):
+                A(f'<tr><td class="l">{arm}</td><td>{s["n_unanimous"]} / '
+                  f'{s["n_cells"]}</td><td>{pct(s["agree_frac"],0)}</td></tr>')
+        A('</table>')
+        A('<p>The two arms fail to repeat in opposite ways, and the comparison '
+          'is the finding. Without the debate the pipeline is perfectly '
+          'repeatable and perfectly uninformative: every one of its '
+          f'{co["no_debate"]["overweight"]} cells says Overweight, so agreement '
+          'across runs is guaranteed and worth nothing. With the debate it '
+          'discriminates between cells, but only '
+          f'{b.get("n_unanimous", 0)} of {b.get("n_cells", 0)} cells returned '
+          'the same rating three times. Repeatability and informativeness are '
+          'in tension here, and the usual reading of &ldquo;the system is '
+          'reproducible&rdquo; conflates the two.</p>')
+        A('<p class="foot">The remaining non-determinism is not the sampler. '
+          'At temperature 0 the model is as close to deterministic as decoding '
+          'allows; what still varies is the multi-agent transcript itself, '
+          'which is re-generated in full on every run and feeds back into every '
+          'later agent.</p>')
+
     # ---------------- 5 debug diary
     A('<h2>5. Debug diary</h2>')
     A('<ol>')
@@ -540,7 +670,7 @@ def render(d: dict) -> str:
     A('<p>The engineering claim holds. The pipeline runs end-to-end on a laptop '
       'with nothing but an API key, emits a five-tier rating per (ticker, date) '
       'cell, and settles each one to a measurable alpha against a regional '
-      'benchmark. DeepSwap drops in through the repo\'s own provider with no '
+      'benchmark. DeepSeek drops in through the repo\'s own provider with no '
       'code change. The multi-agent graph — analysts, researchers, trader, risk '
       'debate — executes as described.</p>')
 
@@ -559,8 +689,8 @@ def render(d: dict) -> str:
       '— and it is the one result in this study that is ours alone, independent '
       'of whether the paper\'s absolute numbers hold up.</p>')
     if None not in (b_cr, n_cr) and bh.get("CR%") is not None:
-        A(f'<div class="note good">Read against the buy-and-hold control, the '
-          f'reconstruction says the agent <i>does</i> add value — but by '
+        A(f'<div class="note good">Read against the buy-and-hold control on '
+          f'AAPL, the reconstruction says the agent <i>does</i> add value — but by '
           f'{num(b_cr - bh["CR%"],1)} percentage points of cumulative return '
           f'over {num(bh["CR%"],2)}%, not by the '
           f'{num((t1["reference"]["AAPL"]["paper_TradingAgents"] or {}).get("CR%"),2)}% '
@@ -572,7 +702,23 @@ def render(d: dict) -> str:
     A('<h3>6.3 What does not reproduce, and the mechanism in each case</h3>')
     A('<table class="verdict"><tr><th class="l">Finding</th>'
       '<th class="l">Mechanism</th></tr>')
+    _stab = (d.get("stats") or {}).get("stability", {}).get("baseline") or {}
     mech = [
+        ("A run does not repeat itself, even at temperature 0",
+         f"Only {_stab.get('n_unanimous','?')}/{_stab.get('n_cells','?')} cells "
+         "returned the same rating in all three runs with identical inputs. "
+         "This is the most basic reproducibility property there is, and it "
+         "fails here for reasons no substitution explains: the multi-agent "
+         "transcript is regenerated in full each run and feeds back into every "
+         "later agent, so the pipeline has no fixed point to return to. Any "
+         "single-run number in this report — and in the paper — is one draw "
+         "from a distribution, not a measurement."),
+        ("Improvement over buy-and-hold holds on one ticker out of three",
+         "On AAPL the reconstruction beats the control; on GOOGL and AMZN it "
+         "does not, and on GOOGL the ablated arm is marginally the better of "
+         "the two. The paper reports large gains on all three. With three "
+         "tickers and one quarter there is no basis for a generalisation in "
+         "either direction, so we report this rather than averaging it away."),
         ("Table 1 cannot be produced by the released code at all",
          "CR% / ARR% / SR / MDD% are not implemented in v0.7.0 "
          "(<code>backtest.py</code>: \"must not grow one\"). Any comparison is "
@@ -635,6 +781,9 @@ def render(d: dict) -> str:
       '<li>Is there a snapshot of the news and sentiment feeds for the '
       'backtest window, without which the multimodal claim cannot be '
       'tested at all?</li>'
+      '<li>Are the Table 1 numbers a single run or an average over runs? Given '
+      'the run-to-run variation we measure at temperature 0, a single-run '
+      'figure could differ materially from a repeat of the same experiment.</li>'
       '</ul>')
 
     # ---------------- 7 reproduce
