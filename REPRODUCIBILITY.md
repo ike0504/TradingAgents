@@ -107,9 +107,13 @@ analysts, risk-discussion rounds, tool rounds — is identical.
 
 ## 4. Results
 
-AAPL, the paper's own window, decision dates every 14 days, 2 trials per arm.
-The full rendered report — including every individual cell — is produced by
-`python -m repro.report` and is not retyped here, so it cannot drift from the run.
+The paper's own window, decision dates every 14 days, **3 trials per arm, 38
+cells total, 0 failures**. AAPL is the only ticker carried through all three
+trials; GOOGL and AMZN were run for two each, which is enough to put "ours"
+rows next to all three columns of Table 1 but not enough to test stability.
+
+The full rendered report is produced by `python -m repro.report` and is not
+retyped here, so it cannot drift from the run.
 
 ### 4.1 Primary: the repo's own metric (hit rate / mean alpha)
 
@@ -119,29 +123,41 @@ is the repo's own rule in `backtest.summarize`.
 
 | arm | trials | cells | directional calls | hit rate | coverage | mean alpha (all cells) |
 |---|---|---|---|---|---|---|
-| baseline (Bull + Bear) | 2 | 10 | 8 | **62.5%** | 80% | −1.22% |
-| no_debate (Bull only) | 2 | 9 | 9 | **22.2%** | 100% | −1.33% |
+| baseline (Bull + Bear) | 3 | 19 | 16 | **62.5%** | 84% | **−0.93%** |
+| no_debate (Bull only) | 3 | 19 | 19 | **26.3%** | 100% | **−0.93%** |
 
-Per trial: baseline 66.7% / 60.0%; no_debate 20.0% / 25.0%.
+| arm | trial | cells | scored | hits | hit rate |
+|---|---|---|---|---|---|
+| baseline | 1 | 7 | 5 | 4 | 80.0% |
+| baseline | 2 | 7 | 6 | 4 | 66.7% |
+| baseline | 3 | 5 | 5 | 2 | 40.0% |
+| no_debate | 1 | 7 | 7 | 2 | 28.6% |
+| no_debate | 2 | 7 | 7 | 2 | 28.6% |
+| no_debate | 3 | 5 | 5 | 1 | 20.0% |
 
-**A methodological trap worth stating.** Alpha is a market fact: for the same
-(ticker, date) it is *identical* in both arms, because it is measured from
-prices, not from the decision. The modification therefore cannot move alpha.
-What it moves is whether the rating *called* the direction. Hit rate and the
-rating distribution are the correct dependent variables; "ablating the debate
-changed mean alpha from X to Y" would be a misreading, because the two arms are
-scoring different subsets of cells.
+**A methodological trap worth stating, and a check that we did not fall into
+it.** Alpha is a market fact: for the same (ticker, date) it is *identical* in
+both arms, because it is measured from prices, not from the decision. The two
+arms here cover the *same* 19 (ticker, date, trial) cells, so mean alpha over
+all cells comes out at −0.93% in **both** — exactly as it must if the metric is
+being read correctly. That equality is a useful internal consistency check: it
+confirms alpha is not a dependent variable of this modification at all.
+
+What the modification moves is whether the rating *called* the direction. So
+hit rate and the rating distribution are the correct dependent variables, and
+"ablating the debate changed mean alpha from X to Y" would be a misreading.
 
 ### 4.2 What the modification did: the rating distribution collapsed
 
 | arm | Buy | Overweight | Hold | Underweight | Sell | cells |
 |---|---|---|---|---|---|---|
-| baseline | 0 | 3 | 2 | 5 | 0 | 10 |
-| no_debate | 0 | **9** | 0 | 0 | 0 | 9 |
+| baseline | 0 | 7 | 3 | 9 | 0 | 19 |
+| no_debate | 0 | **19** | 0 | 0 | 0 | 19 |
 
-**Every no_debate cell came back Overweight.** Without a Bear Researcher the
-system does not become more bullish on average — it becomes structurally unable
-to produce a negative view. That is the mechanism behind both 4.1 and 4.3.
+**Every no_debate cell came back Overweight, in all 19 cases across all three
+trials.** Without a Bear Researcher the system does not become more bullish on
+average — it becomes structurally unable to produce a negative view. That is
+the mechanism behind both 4.1 and 4.3.
 
 ### 4.3 Secondary: our run vs Table 1
 
@@ -154,25 +170,98 @@ no transaction costs). ARR% is omitted: see §7.4.
 | AAPL | paper — TradingAgents | 26.62 | 8.21 | 0.91 |
 | AAPL | paper — Buy & Hold | −5.23 | −1.29 | 11.90 |
 | AAPL | **ours — Buy & Hold, same prices** | **−7.63** | −1.57 | 13.41 |
-| AAPL | ours — baseline | **+0.12** | −0.11 | 2.09 |
-| AAPL | ours — no_debate | **−2.39** | −1.17 | 3.88 |
+| AAPL | ours — baseline | **−0.30** | −0.29 | 2.66 |
+| AAPL | ours — no_debate | **−2.13** | −0.96 | 3.63 |
+| GOOGL | paper — TradingAgents | 24.36 | 6.39 | 1.69 |
+| GOOGL | paper — Buy & Hold | 7.78 | 1.35 | 13.04 |
+| GOOGL | **ours — Buy & Hold, same prices** | **9.23** | 1.46 | 14.40 |
+| GOOGL | ours — baseline | **−0.21** | −0.07 | 3.43 |
+| GOOGL | ours — no_debate | **0.03** | 0.07 | 6.72 |
+| AMZN | paper — TradingAgents | 23.21 | 5.60 | 2.11 |
+| AMZN | paper — Buy & Hold | 17.10 | 3.53 | 3.80 |
+| AMZN | **ours — Buy & Hold, same prices** | **20.31** | 3.04 | 4.22 |
+| AMZN | ours — baseline | **6.69** | 2.30 | 2.12 |
+| AMZN | ours — no_debate | **6.69** | 2.30 | 2.12 |
 
-Read against the control: our reconstruction has the agent *beating*
-buy-and-hold by about 7.8 points of cumulative return, in a quarter when
-buy-and-hold lost 7.63% — but the paper reports +26.62%. **The direction of the
-claim survives; the magnitude does not.**
+Read against the control. On AAPL our reconstruction beats buy-and-hold by
+about 7.3 points of cumulative return in a quarter when buy-and-hold lost
+7.63% — the direction of the paper's claim survives while its magnitude does
+not. **But it survives on one ticker out of three**: on GOOGL and AMZN the
+reconstruction *loses* to the control, and on GOOGL the ablated arm is
+marginally the better of the two. We report this rather than averaging it away.
 
 ### 4.4 The modification, quantified
 
 | effect of removing the Bull/Bear debate | baseline | no_debate | Δ |
 |---|---|---|---|
-| AAPL CR% | +0.12 | −2.39 | −2.51 |
-| AAPL SR | −0.11 | −1.17 | −1.06 |
-| AAPL MDD% | 2.09 | 3.88 | +1.79 |
-| hit rate (pooled) | 62.5% | 22.2% | −40.3 pp |
+| AAPL CR% | −0.30 | −2.13 | −1.82 |
+| AAPL SR | −0.29 | −0.96 | −0.67 |
+| AAPL MDD% | 2.66 | 3.63 | +0.97 |
+| GOOGL CR% | −0.21 | 0.03 | +0.24 |
+| GOOGL SR | −0.07 | 0.07 | +0.15 |
+| GOOGL MDD% | 3.43 | 6.72 | +3.29 |
+| AMZN CR% | 6.69 | 6.69 | 0.00 |
+| AMZN SR | 2.30 | 2.30 | 0.00 |
+| AMZN MDD% | 2.12 | 2.12 | 0.00 |
+| hit rate (pooled) | 62.5% | 26.3% | −36.2 pp |
 | LLM calls per cell | 23 | 19 | −4 |
 | prompt tokens per cell | 217,126 | 155,274 | −28% |
 | completion tokens per cell | 69,190 | 51,606 | −25% |
+
+AMZN shows Δ = 0.00 because it contributed one decision date on which both arms
+rated Overweight. GOOGL is the one case where ablation *helped* slightly. The
+modification is therefore not uniformly harmful — it is uniformly *discriminating*,
+and on these two tickers there was not enough signal for discrimination to pay.
+
+### 4.5 Is the effect real, or is it noise?
+
+`repro/stats.py` computes exact tests (scipy is not installed here, and the
+2×2 tables have a zero cell, so no normal approximation applies anyway).
+
+| comparison | baseline | no_debate | two-sided p |
+|---|---|---|---|
+| ratings that are Overweight | 7 / 19 | 19 / 19 | **3.7e-05** |
+| directional calls that hit | 10 / 16 | 5 / 19 | **0.044** |
+
+Paired by trial, the hit-rate difference is **+36.5 pp ± 15.8 pp over 3 trials,
+3/3 in the same direction** (+51.4 / +38.1 / +20.0 pp).
+
+The structural result is the strong one and the hit-rate result is the weaker
+one — and the reason is worth stating: the debate pushes ratings towards Hold
+and Underweight, and a Hold is not scored, so ablation changes which cells are
+even counted. Three trials is the minimum the assignment asks for; it is not
+enough to separate the effect from run-to-run noise, so the collapse is what
+carries the argument.
+
+### 4.6 A run does not repeat itself — and that is a result
+
+Every AAPL cell was run three times with identical inputs, identical code and
+`temperature = 0.0`.
+
+| arm | cells unanimous across all 3 runs | share |
+|---|---|---|
+| baseline | 2 / 7 | 29% |
+| no_debate | **7 / 7** | 100% |
+
+| date | realised alpha | baseline t1 | t2 | t3 | no_debate t1 | t2 | t3 |
+|---|---|---|---|---|---|---|---|
+| 2024-01-01 | −0.50% | Overweight | Underweight | Overweight | Overweight | Overweight | Overweight |
+| 2024-01-29 | +0.00% | Hold | Overweight | Overweight | Overweight | Overweight | Overweight |
+| 2024-02-26 | −6.90% | Hold | Underweight | Underweight | Overweight | Overweight | Overweight |
+| 2024-03-11 | +1.50% | Overweight | Underweight | Underweight | Overweight | Overweight | Overweight |
+| 2024-03-25 | −0.20% | Underweight | Underweight | Underweight | Overweight | Overweight | Overweight |
+
+The two arms are stable in opposite ways, and the contrast is the finding.
+Without the debate the pipeline is perfectly repeatable and perfectly
+uninformative: all 19 cells say Overweight, so agreement across runs is
+guaranteed and worth nothing. With the debate it discriminates between cells,
+but only 2 of 7 cells returned the same verdict three times — for AAPL, 1 of 5.
+
+The residual non-determinism is not the sampler: at temperature 0 decoding is
+as close to deterministic as it gets. What varies is the multi-agent transcript,
+which is regenerated in full on every run and feeds back into every downstream
+agent. This is also why the paper's own single-run numbers cannot be checked
+against anything.
 
 ---
 
@@ -332,7 +421,25 @@ Two effects observed, both worth documenting for anyone repeating the swap:
   against the paper's "11 LLM calls & 20+ tool calls per prediction". The
   grid had to be thinned from daily to every 14 days to fit a laptop budget.
 
-### 7.6 On the plausibility of the target itself
+### 7.6 The pipeline does not repeat itself, even at temperature 0
+
+Each AAPL cell was run three times with identical inputs and `temperature =
+0.0`. Only **2 of 7** cells returned the same rating all three times (for AAPL
+itself, 1 of 5); typical disagreement is that 2024-01-01 came back Overweight,
+Underweight and Overweight in three runs of the same cell.
+
+This is not the sampler. At temperature 0 the model is as close to
+deterministic as decoding allows. What varies is the multi-agent transcript
+itself, which is regenerated in full on every run and is the input to every
+downstream agent, so the pipeline has no fixed point to return to.
+
+This is the most basic reproducibility property there is, and it fails here for
+reasons no model substitution explains. Its consequence is scope-setting: any
+single-run figure in the paper — and in this study — is one draw from a
+distribution rather than a measurement, which is why three trials are reported
+throughout and why §4.5 separates the structural result from the noisy one.
+
+### 7.7 On the plausibility of the target itself
 
 The paper reports AAPL at +26.62% over three months with a Sharpe ratio of 8.21
 and a maximum drawdown of 0.91%, in a quarter when buy-and-hold lost 5.23%. The
@@ -354,8 +461,9 @@ through which channel.
 | DeepSeek drops in as a backbone via the built-in provider | ✅ reproduced |
 | Decisions are emitted as a five-tier rating and settle to an alpha | ✅ reproduced |
 | The Bull/Bear debate can be ablated cleanly | ✅ reproduced (isolated, one config key) |
-| The debate matters: ablating it collapses the rating distribution | ✅ reproduced — 9/9 cells Overweight; hit rate 62.5% → 22.2% |
-| Directional calls beat the benchmark | ⚠️ partial — 62.5% hit rate on 8 scored calls; reconstruction beats B&H by ~7.8pp, not the paper's +26.62% |
+| The debate matters: ablating it collapses the rating distribution | ✅ reproduced — 19/19 cells Overweight vs 7/19; Fisher exact p = 3.7e-05; hit rate 62.5% → 26.3% (p = 0.044) |
+| Directional calls beat the benchmark | ⚠️ partial — 62.5% hit rate on 16 scored calls; reconstruction beats B&H on AAPL only |
+| A run repeats itself at temperature 0 | ❌ not reproducible — 2/7 cells unanimous across 3 runs; the ablated arm is stable only because it never varies in what it says |
 | Table 1 CR% / ARR% / SR / MDD% | ❌ not reproducible — not implemented in the released code |
 | The paper's Buy & Hold row | ❌ not reproducible — systematic attenuation (ratio 0.842 on GOOGL/AMZN), no window fits |
 | The paper's ARR% column | ❌ not reproducible — internally inconsistent with its own CR% |
