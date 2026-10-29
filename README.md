@@ -36,9 +36,18 @@
 > **no library code was modified.** Not every reported number reproduces — the
 > point of the exercise is to establish which, and why.
 >
+> **Headline.** 38 cells, 3 trials per arm, 0 failures. Ablating the Bull/Bear
+> debate does not make the system more bullish — it makes it structurally unable
+> to dissent: 19/19 cells came back Overweight, against 7/19 with the debate on
+> (Fisher exact p = 3.7e-05), and hit rate fell 62.5% → 26.3%. Separately, the
+> paper's Table 1 does not reproduce: its metrics are not implemented in the
+> released code, and its own deterministic Buy & Hold row does not reproduce on
+> any window. A third result is independent of either: at temperature 0, only
+> 2 of 7 cells returned the same verdict across three runs.
+>
 > | deliverable | |
 > |---|---|
-> | Report (≤10 pp) | [REPORT.pdf](REPORT.pdf) — rendered by `python -m repro.report` from the result files, so the numbers cannot drift from the run |
+> | Report (8 pp of 10) | [REPORT.pdf](REPORT.pdf) — rendered by `python -m repro.report` from the result files, so the numbers cannot drift from the run |
 > | Study notes | [REPRODUCIBILITY.md](REPRODUCIBILITY.md) — setup, target claims, debug diary, conclusions |
 > | Recording script | [PRESENTATION.md](PRESENTATION.md) — timed 15-minute walkthrough |
 > | Run it yourself | `python -m repro.run_sweep --arm baseline --trial 1 --smoke` then `python -m repro.run_budget` |
