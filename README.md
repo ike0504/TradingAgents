@@ -50,7 +50,7 @@
 > |---|---|
 > | Report (9 pp of 10) | [REPORT.pdf](REPORT.pdf) — rendered by `python -m repro.report` from the result files, so the numbers cannot drift from the run |
 > | Study notes | [REPRODUCIBILITY.md](REPRODUCIBILITY.md) — setup, target claims, debug diary, conclusions |
-> | Recording script | [PRESENTATION.md](PRESENTATION.md) — timed 15-minute walkthrough |
+> | Recorded presentation (11:39) | [youtube.com/watch?v=sbrwD035XBw](https://youtu.be/sbrwD035XBw) — unlisted; script in [PRESENTATION.md](PRESENTATION.md) |
 > | Run it yourself | `python -m repro.run_sweep --arm baseline --trial 1 --smoke` then `python -m repro.run_budget` |
 
 ## News
