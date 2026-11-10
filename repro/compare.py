@@ -37,8 +37,19 @@ def load_runs(results_dir: str | None = None) -> list[dict]:
     for f in sorted(base.glob("*.json")):
         d = json.loads(f.read_text(encoding="utf-8"))
         log = d.get("log_path")
-        if not log or not Path(log).exists():
+        if not log:
             continue
+        p = Path(log)
+        if not p.exists():
+            # Sweeps recorded on the machine that ran them store an absolute
+            # log path that means nothing after the results folder is moved
+            # (Windows -> macOS here). Re-root the run directory under the
+            # local results dir and accept the run only if those exact logs
+            # are present, so relocation cannot silently widen the sample.
+            p = base.parent / "backtest" / p.parent.name / p.name
+            if not p.exists():
+                continue
+            log = str(p)
         runs.append({
             "arm": d.get("arm"),
             "trial": d.get("trial"),

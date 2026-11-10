@@ -1,6 +1,7 @@
 # Reproducibility study: TradingAgents
 
 Course: **FTEC5660 — Agentic AI for Business and FinTech**, Individual Project 2
+Author: **Ji, Xinyi** (Student ID 1155264996)
 Paper: *TradingAgents: Multi-Agents LLM Financial Trading Framework*, arXiv:2412.20138
 Repo under test: `TauricResearch/TradingAgents` @ `e8f5503` (v0.7.0)
 Fork with this study: `ike0504/TradingAgents`

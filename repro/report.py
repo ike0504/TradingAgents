@@ -237,7 +237,8 @@ def render(d: dict) -> str:
 
     # ---------------- header
     A('<h1>Reproducibility study: TradingAgents</h1>')
-    A('<div class="sub">FTEC5660 — Agentic AI for Business and FinTech · '
+    A('<div class="sub">Ji, Xinyi · Student ID 1155264996 · '
+      'FTEC5660 — Agentic AI for Business and FinTech · '
       'Individual Project 2 · '
       'Paper: <i>TradingAgents: Multi-Agents LLM Financial Trading Framework</i> '
       '(arXiv:2412.20138) · '
@@ -474,10 +475,18 @@ def render(d: dict) -> str:
             if not t:
                 continue
             m = t["metrics"]
-            A(f'<tr><td class="l">{tk}</td><td class="l">ours — {arm}</td>'
-              f'<td>{num(m["CR%"]["mean"])}</td><td>{num(m["SR"]["mean"])}</td>'
-              f'<td>{num(m["MDD%"]["mean"])}</td></tr>')
+        A(f'<tr><td class="l">{tk}</td><td class="l">ours — {arm}</td>'
+          f'<td>{num(m["CR%"]["mean"])}</td><td>{num(m["SR"]["mean"])}</td>'
+          f'<td>{num(m["MDD%"]["mean"])}</td></tr>')
     A('</table>')
+    A('<div class="note">This table averages the '
+      f'{(t1["arms"].get("baseline") or {}).get("n_runs", 0)} baseline and '
+      f'{(t1["arms"].get("no_debate") or {}).get("n_runs", 0)} no-debate runs '
+      'whose complete logs are retained. The two remaining scored cells of the '
+      '38 (the first-date run of each arm, whose log was recorded under a '
+      'calendar warm-up directory that no longer exists) enter the per-cell '
+      'and significance analyses (&sect;4.2, &sect;4.5) but cannot be '
+      're-simulated, so they are absent here.</div>')
 
     # 4.4 modification effect
     A('<h3>4.4 The modification, quantified</h3>')
@@ -790,7 +799,8 @@ def render(d: dict) -> str:
     A('<h2>7. Reproducing this study</h2>')
     A('<pre>' + esc(
         "git clone https://github.com/ike0504/TradingAgents.git\n"
-        "cd TradingAgents && python -m venv .venv && .venv/Scripts/activate\n"
+        "cd TradingAgents && python -m venv .venv\n"
+        "# activate: .venv\\Scripts\\activate (Windows) | .venv/bin/activate (macOS/Linux)\n"
         "pip install -e .  &&  echo DEEPSEEK_API_KEY=... > .env\n\n"
         "python -m repro.run_sweep --arm baseline --trial 1 --smoke   # one cell, wiring check\n"
         "python -m repro.run_budget                                   # full paired grid, off-peak only\n"

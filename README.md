@@ -29,7 +29,8 @@
 
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
-> **This fork is a course reproducibility study (FTEC5660, Individual Project 2).**
+> **This fork is a course reproducibility study (FTEC5660, Individual Project 2)**
+> by Ji, Xinyi (student ID on the submitted report).
 > It runs the released pipeline on DeepSeek over the paper's own window and
 > tickers, ablates the Bull/Bear research debate, and compares the result with
 > Table 1 of arXiv:2412.20138. Everything added for the study lives in `repro/`;
@@ -47,7 +48,7 @@
 >
 > | deliverable | |
 > |---|---|
-> | Report (8 pp of 10) | [REPORT.pdf](REPORT.pdf) — rendered by `python -m repro.report` from the result files, so the numbers cannot drift from the run |
+> | Report (9 pp of 10) | [REPORT.pdf](REPORT.pdf) — rendered by `python -m repro.report` from the result files, so the numbers cannot drift from the run |
 > | Study notes | [REPRODUCIBILITY.md](REPRODUCIBILITY.md) — setup, target claims, debug diary, conclusions |
 > | Recording script | [PRESENTATION.md](PRESENTATION.md) — timed 15-minute walkthrough |
 > | Run it yourself | `python -m repro.run_sweep --arm baseline --trial 1 --smoke` then `python -m repro.run_budget` |
